@@ -71,6 +71,59 @@ contract EScript is Script {
         });
     }
 
+    function batchWithdrawTo(address _vault, uint256 _amount, address _to) public view returns (IEVC.BatchItem memory) {
+        return IEVC.BatchItem({
+            onBehalfOfAccount: e_account,
+            targetContract: _vault,
+            value: 0,
+            data: abi.encodeWithSelector(EVault.withdraw.selector, _amount, _to, e_account)
+        });
+    }
+
+    function batchRepayWithShares(address _vault, uint256 _amount) public view returns (IEVC.BatchItem memory) {
+        return IEVC.BatchItem({
+            onBehalfOfAccount: e_account,
+            targetContract: _vault,
+            value: 0,
+            data: abi.encodeWithSelector(EVault.repayWithShares.selector, _amount, e_account)
+        });
+    }
+
+    function batchSwapAndRepay(
+        address _inputVault,
+        address _repayVault,
+        uint256 _amountIn,
+        string memory _swapJson,
+        string memory _verifyJson
+    ) public view returns (IEVC.BatchItem[] memory items) {
+        items = new IEVC.BatchItem[](4);
+        items[0] = batchWithdrawTo(_inputVault, _amountIn, vm.parseJsonAddress(_swapJson, ".swapperAddress"));
+        items[1] = batchPayload(vm.parseJsonAddress(_swapJson, ".swapperAddress"), vm.parseJsonBytes(_swapJson, ".swapperData"));
+        items[2] = batchPayload(vm.parseJsonAddress(_verifyJson, ".verifierAddress"), vm.parseJsonBytes(_verifyJson, ".verifierData"));
+        items[3] = batchRepayWithShares(_repayVault, type(uint256).max);
+    }
+
+    /// @notice Withdraw from the inputVault, swap and deposit to the outputVault
+    /// @param _swapJson The json file for the swap router data
+    /// @param _verifyJson The json file for the verify router data
+    function batchWithdrawAndSwap(
+        address _inputVault,
+        uint256 _amountIn,
+        string memory _swapJson,
+        string memory _verifyJson
+    ) public view returns (IEVC.BatchItem[] memory items) {
+        items = new IEVC.BatchItem[](3);
+        items[0] = batchWithdrawTo(_inputVault, _amountIn, vm.parseJsonAddress(_swapJson, ".swapperAddress"));
+        items[1] = batchPayload(vm.parseJsonAddress(_swapJson, ".swapperAddress"), vm.parseJsonBytes(_swapJson, ".swapperData"));
+        items[2] = batchPayload(vm.parseJsonAddress(_verifyJson, ".verifierAddress"), vm.parseJsonBytes(_verifyJson, ".verifierData"));
+    }
+
+    function broadcastBatch(IEVC.BatchItem[] memory _items) public {
+        vm.startBroadcast();
+        evc.batch(_items);
+        vm.stopBroadcast();
+    }
+
     function sharesBalance(address _vault) public view returns (uint256) {
         return EVault(_vault).balanceOf(e_account);
     }
@@ -81,6 +134,18 @@ contract EScript is Script {
 
     function debtBalance(address _vault) public view returns (uint256) {
         return EVault(_vault).debtOf(e_account);
+    }
+
+    function getRoutingData(
+        address _inputVault,
+        address _outputVault,
+        address _inputToken,
+        address _outputToken,
+        uint256 _amount
+    ) public returns (string memory _swapJson, string memory _verifyJson) {
+        requestPayload(_inputVault, _outputVault, _inputToken, _outputToken, _amount);
+        _swapJson = getJsonFile("./script/payloads/swapData.json");
+        _verifyJson = getJsonFile("./script/payloads/verifyData.json");
     }
 
     function requestPayload(
@@ -107,6 +172,23 @@ contract EScript is Script {
         inputs[13] = vm.toString(_amount);
         
         vm.ffi(inputs);
+    }
+
+    function logPositionInfo(
+        address _collateralVault,
+        address _hedgedVault,
+        address _liabilityVault
+    ) public view {
+        console.log("--------------------------------");
+        console.log("COLLATERAL VAULT: ", assetsBalance(_collateralVault));
+        console.log("HEDGED VAULT: ",assetsBalance(_hedgedVault));
+        uint256 debt = debtBalance(_liabilityVault);
+        if (debt > 0) {
+            console.log("LIABILITY VAULT DEBT: ", debt);
+        } else {
+            console.log("LIABILITY VAULT ASSET BALANCE: ", assetsBalance(_liabilityVault));
+        }
+        console.log("--------------------------------");
     }
 
 }
